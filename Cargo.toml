@@ -1,0 +1,27 @@
+[package]
+name = "laya-snake"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+crossterm = "0.29"
+laya = "0.1.1"
+rand = "0.9"
+serde_json = "1"
+rayon = "1"
+memmap2 = "0.9"
+tokenizers = "0.21"
+libm = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[features]
+default = []
+cuda = ["laya/cuda"]
+metal = ["laya/metal"]

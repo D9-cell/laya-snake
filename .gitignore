@@ -1,5 +1,4 @@
-venv/
-.venv/
-__pycache__/
-*.pyc
-.pip-tmp/
+/target
+/models
+# local editor / agent settings
+/.claude
