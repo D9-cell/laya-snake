@@ -1,5 +1,5 @@
 use crate::{
-    ai::{Decision, LayaBrain},
+    ai::Decision,
     game::{estimate_risk_and_reachability, Dir, GameSnapshot, SnakeGame},
     scores,
 };
@@ -24,9 +24,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-const SPEED_LEVELS_MS: [u64; 5] = [1500, 900, 500, 200, 0];
-const MIN_W: usize = 10;
-const MIN_H: usize = 8;
+pub(crate) const SPEED_LEVELS_MS: [u64; 5] = [1500, 900, 500, 200, 0];
+pub(crate) const MIN_W: usize = 10;
+pub(crate) const MIN_H: usize = 8;
 const SCALE_STEP_W: usize = 4;
 const SCALE_STEP_H: usize = 2;
 /// While a model call is in flight the "thinking" timer is redrawn this often.
@@ -34,7 +34,7 @@ const THINK_REDRAW: Duration = Duration::from_millis(100);
 /// The elapsed-time clock in the corner ticks once a second.
 const CLOCK_REDRAW: Duration = Duration::from_secs(1);
 
-struct Request {
+pub(crate) struct Request {
     snapshot: GameSnapshot,
     generation: u64,
 }
@@ -57,13 +57,13 @@ struct Shared {
 /// Runs model calls on a background thread. Only the *latest* request is kept: a newer request
 /// replaces one that has not started yet, so a request can never be silently lost behind a stale
 /// one (which would leave the game waiting for a result that never comes).
-struct InferenceWorker {
+pub(crate) struct InferenceWorker {
     shared: Arc<Shared>,
     result_rx: Receiver<ResultMessage>,
 }
 
 impl InferenceWorker {
-    fn new<F>(decide: F) -> Self
+    pub(crate) fn new<F>(decide: F) -> Self
     where
         F: Fn(&GameSnapshot) -> Result<Decision, String> + Send + 'static,
     {
@@ -195,7 +195,7 @@ fn trail_glyph(direction: Dir) -> &'static str {
 /// The move to execute and whether the safety shield overrode the model's top choice. The shield
 /// walks the directions from most to least likely and takes the first one that is not fatal; ties
 /// go to the model's own pick.
-fn apply_shield(decision: &Decision, game: &SnakeGame, enabled: bool) -> (Dir, bool) {
+pub(crate) fn apply_shield(decision: &Decision, game: &SnakeGame, enabled: bool) -> (Dir, bool) {
     let mut ranked: Vec<Dir> = std::iter::once(decision.top)
         .chain(Dir::ALL.into_iter().filter(|d| *d != decision.top))
         .collect();
@@ -217,51 +217,128 @@ fn apply_shield(decision: &Decision, game: &SnakeGame, enabled: bool) -> (Dir, b
 }
 
 /// What the UI prints about the model backend.
-struct BrainInfo {
-    checkpoint: String,
-    engine: String,
-    device: String,
+pub struct BrainInfo {
+    pub checkpoint: String,
+    pub engine: String,
+    pub device: String,
 }
 
-struct App {
-    game: SnakeGame,
-    worker: InferenceWorker,
-    best: u32,
-    round_no: u32,
-    speed_level: usize,
-    paused: bool,
-    shield_enabled: bool,
-    generation: u64,
+/// `--mock` runs never read or write the saved best scores: they are not the model's.
+fn is_mock(info: &BrainInfo) -> bool {
+    info.checkpoint == "mock"
+}
+
+fn load_best(info: &BrainInfo, width: usize, height: usize) -> u32 {
+    if is_mock(info) {
+        0
+    } else {
+        scores::get_best(width, height)
+    }
+}
+
+/// How many executed moves the move history keeps (for the web dashboard's charts and log).
+pub(crate) const MOVE_HISTORY: usize = 240;
+/// How many finished rounds are kept.
+pub(crate) const ROUND_HISTORY: usize = 100;
+
+/// One executed move: what the model said, what actually ran, and what it cost.
+#[derive(Clone, Debug)]
+pub(crate) struct MoveRecord {
+    pub n: u64,
+    pub round: u32,
+    pub probs: [f64; 4],
+    pub model_top: Dir,
+    pub chosen: Dir,
+    pub intervened: bool,
+    pub inference_ms: f64,
+    pub risk: f64,
+    pub reachable: f64,
+    pub score: u32,
+    pub ate: bool,
+}
+
+/// One finished round.
+#[derive(Clone, Debug)]
+pub(crate) struct RoundRecord {
+    pub round: u32,
+    pub width: usize,
+    pub height: usize,
+    pub score: u32,
+    pub length: usize,
+    pub decisions: u32,
+    pub interventions: u32,
+    pub avg_ms: f64,
+    pub duration_s: f64,
+    /// "wall", "self", "board full" or "reset".
+    pub cause: &'static str,
+}
+
+/// Session-wide counters across all rounds.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Totals {
+    pub decisions: u64,
+    pub inference_ms: f64,
+    pub min_ms: Option<f64>,
+    pub max_ms: f64,
+    pub interventions: u64,
+    pub food: u64,
+    pub model_errors: u64,
+    pub deaths_wall: u64,
+    pub deaths_self: u64,
+    pub dir_counts: [u64; 4],
+}
+
+pub(crate) struct App {
+    pub(crate) game: SnakeGame,
+    pub(crate) worker: InferenceWorker,
+    pub(crate) best: u32,
+    pub(crate) round_no: u32,
+    pub(crate) speed_level: usize,
+    pub(crate) paused: bool,
+    pub(crate) shield_enabled: bool,
+    pub(crate) generation: u64,
     /// A request for the current position is running (or queued) on the worker.
-    awaiting_result: bool,
-    think_start: Instant,
+    pub(crate) awaiting_result: bool,
+    pub(crate) think_start: Instant,
     /// The model has answered but the pacing delay has not elapsed yet.
-    pending: Option<Decision>,
+    pub(crate) pending: Option<Decision>,
     /// Earliest time the next move may be executed (pacing between moves).
-    ready_at: Instant,
+    pub(crate) ready_at: Instant,
     /// Earliest time to (re)dispatch a request; pushed out after a model error.
-    dispatch_not_before: Instant,
-    last_decision: Option<Decision>,
-    last_chosen: Option<Dir>,
-    last_intervened: bool,
-    last_risk: f64,
-    last_reachable: f64,
-    shield_count: u32,
-    decisions_count: u32,
-    decision_times: VecDeque<Instant>,
-    trail: VecDeque<Dir>,
-    error_message: Option<String>,
-    start_time: Instant,
-    info: BrainInfo,
+    pub(crate) dispatch_not_before: Instant,
+    pub(crate) last_decision: Option<Decision>,
+    pub(crate) last_chosen: Option<Dir>,
+    pub(crate) last_intervened: bool,
+    pub(crate) last_risk: f64,
+    pub(crate) last_reachable: f64,
+    pub(crate) shield_count: u32,
+    pub(crate) decisions_count: u32,
+    pub(crate) decision_times: VecDeque<Instant>,
+    pub(crate) trail: VecDeque<Dir>,
+    pub(crate) error_message: Option<String>,
+    pub(crate) start_time: Instant,
+    pub(crate) info: BrainInfo,
+    pub(crate) moves: VecDeque<MoveRecord>,
+    pub(crate) rounds: VecDeque<RoundRecord>,
+    pub(crate) totals: Totals,
+    pub(crate) round_start: Instant,
+    pub(crate) round_ms_sum: f64,
+    /// The current round has already been written to `rounds`.
+    pub(crate) round_recorded: bool,
 }
 
 impl App {
-    fn new(worker: InferenceWorker, info: BrainInfo, width: usize, height: usize) -> Self {
+    pub(crate) fn new(
+        worker: InferenceWorker,
+        info: BrainInfo,
+        width: usize,
+        height: usize,
+    ) -> Self {
         let now = Instant::now();
         Self {
             game: SnakeGame::new(width, height),
             worker,
-            best: scores::get_best(width, height),
+            best: load_best(&info, width, height),
             round_no: 1,
             speed_level: 2,
             paused: false,
@@ -284,10 +361,17 @@ impl App {
             error_message: None,
             start_time: now,
             info,
+            moves: VecDeque::with_capacity(MOVE_HISTORY),
+            rounds: VecDeque::with_capacity(ROUND_HISTORY),
+            totals: Totals::default(),
+            round_start: now,
+            round_ms_sum: 0.0,
+            round_recorded: false,
         }
     }
 
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
+        self.finish_round("reset");
         self.game.reset();
         self.reset_transient();
         self.round_no += 1;
@@ -311,6 +395,44 @@ impl App {
         self.decision_times.clear();
         self.trail.clear();
         self.error_message = None;
+        self.round_start = now;
+        self.round_ms_sum = 0.0;
+        self.round_recorded = false;
+    }
+
+    /// Write the current round to the history, once. A round with no moves is not worth a row.
+    pub(crate) fn finish_round(&mut self, cause: &'static str) {
+        if self.round_recorded || self.decisions_count == 0 {
+            return;
+        }
+        self.round_recorded = true;
+        if self.rounds.len() == ROUND_HISTORY {
+            self.rounds.pop_front();
+        }
+        self.rounds.push_back(RoundRecord {
+            round: self.round_no,
+            width: self.game.width,
+            height: self.game.height,
+            score: self.game.score,
+            length: self.game.snake.len(),
+            decisions: self.decisions_count,
+            interventions: self.shield_count,
+            avg_ms: self.round_ms_sum / self.decisions_count as f64,
+            duration_s: self.round_start.elapsed().as_secs_f64(),
+            cause,
+        });
+    }
+
+    /// Start a new round on a board of a different size.
+    pub(crate) fn resize(&mut self, width: usize, height: usize) {
+        if (width, height) == (self.game.width, self.game.height) {
+            return;
+        }
+        self.finish_round("reset");
+        self.game = SnakeGame::new(width, height);
+        self.reset_transient();
+        self.round_no += 1;
+        self.best = load_best(&self.info, width, height);
     }
 
     fn change_scale(&mut self, delta: i32) {
@@ -318,16 +440,10 @@ impl App {
         let nw = (self.game.width as i32 + delta * SCALE_STEP_W as i32).max(MIN_W as i32) as usize;
         let nh = (self.game.height as i32 + delta * SCALE_STEP_H as i32).max(MIN_H as i32) as usize;
         let (nw, nh) = fit_dims(cols, rows, nw, nh);
-        if (nw, nh) == (self.game.width, self.game.height) {
-            return;
-        }
-        self.game = SnakeGame::new(nw, nh);
-        self.reset_transient();
-        self.round_no += 1;
-        self.best = scores::get_best(nw, nh);
+        self.resize(nw, nh);
     }
 
-    fn decisions_per_sec(&self) -> f64 {
+    pub(crate) fn decisions_per_sec(&self) -> f64 {
         if self.decision_times.len() < 2 {
             return 0.0;
         }
@@ -377,7 +493,7 @@ impl App {
     }
 
     /// Advance the game state machine. Returns true when something visible changed.
-    fn tick(&mut self) -> bool {
+    pub(crate) fn tick(&mut self) -> bool {
         if self.paused || self.game.game_over {
             return false;
         }
@@ -391,6 +507,7 @@ impl App {
                     match result.decision {
                         Ok(decision) => self.pending = Some(decision),
                         Err(err) => {
+                            self.totals.model_errors += 1;
                             self.error_message = Some(err);
                             self.dispatch_not_before = Instant::now() + Duration::from_secs(1);
                         }
@@ -403,6 +520,9 @@ impl App {
         if self.pending.is_some() && now >= self.ready_at {
             let decision = self.pending.take().unwrap();
             let (chosen, intervened) = apply_shield(&decision, &self.game, self.shield_enabled);
+            let ms = decision.inference_ms;
+            let model_top = decision.top;
+            let probs = decision.probs;
             self.last_decision = Some(decision);
             self.last_chosen = Some(chosen);
             self.last_intervened = intervened;
@@ -414,7 +534,58 @@ impl App {
             self.last_risk = risk;
             self.last_reachable = reachable;
 
+            let head = self.game.next_head(chosen);
+            let cause = if !self.game.is_fatal(chosen) {
+                None
+            } else if head.x < 0
+                || head.y < 0
+                || head.x >= self.game.width as i32
+                || head.y >= self.game.height as i32
+            {
+                Some("wall")
+            } else {
+                Some("self")
+            };
+            let score_before = self.game.score;
+
             self.game.step(chosen);
+
+            let t = &mut self.totals;
+            t.decisions += 1;
+            t.inference_ms += ms;
+            t.min_ms = Some(t.min_ms.map_or(ms, |m| m.min(ms)));
+            t.max_ms = t.max_ms.max(ms);
+            t.dir_counts[chosen.index()] += 1;
+            if intervened {
+                t.interventions += 1;
+            }
+            let ate = self.game.score > score_before;
+            if ate {
+                t.food += 1;
+            }
+            match cause {
+                Some("wall") => t.deaths_wall += 1,
+                Some(_) => t.deaths_self += 1,
+                None => {}
+            }
+            self.round_ms_sum += ms;
+            if self.moves.len() == MOVE_HISTORY {
+                self.moves.pop_front();
+            }
+            self.moves.push_back(MoveRecord {
+                n: self.totals.decisions,
+                round: self.round_no,
+                probs,
+                model_top,
+                chosen,
+                intervened,
+                inference_ms: ms,
+                risk,
+                reachable,
+                score: self.game.score,
+                ate,
+            });
+
             if self.trail.len() == 16 {
                 self.trail.pop_front();
             }
@@ -426,7 +597,17 @@ impl App {
             self.decision_times.push_back(now);
 
             if self.game.score > self.best {
-                self.best = scores::set_best(self.game.width, self.game.height, self.game.score);
+                self.best = if is_mock(&self.info) {
+                    self.game.score
+                } else {
+                    scores::set_best(self.game.width, self.game.height, self.game.score)
+                };
+            }
+            if let Some(cause) = cause {
+                self.finish_round(cause);
+            } else if self.game.food.is_none() {
+                self.game.game_over = true;
+                self.finish_round("board full");
             }
             self.ready_at = now + Duration::from_millis(SPEED_LEVELS_MS[self.speed_level]);
             self.error_message = None;
@@ -437,7 +618,7 @@ impl App {
     }
 
     /// True while the screen needs periodic refreshes even without any state change.
-    fn animating(&self) -> bool {
+    pub(crate) fn animating(&self) -> bool {
         self.awaiting_result && !self.paused
     }
 
@@ -808,28 +989,28 @@ impl App {
     }
 }
 
-pub fn run(brain: LayaBrain, width: usize, height: usize) -> anyhow::Result<()> {
+pub fn run<F>(decide: F, info: BrainInfo, width: usize, height: usize) -> anyhow::Result<()>
+where
+    F: Fn(&GameSnapshot) -> Result<Decision, String> + Send + 'static,
+{
     terminal::enable_raw_mode()?;
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, Hide)?;
 
-    let result = run_inner(brain, width, height);
+    let result = run_inner(decide, info, width, height);
 
     let _ = execute!(out, Show, LeaveAlternateScreen, ResetColor);
     let _ = terminal::disable_raw_mode();
     result
 }
 
-fn run_inner(brain: LayaBrain, width: usize, height: usize) -> anyhow::Result<()> {
+fn run_inner<F>(decide: F, info: BrainInfo, width: usize, height: usize) -> anyhow::Result<()>
+where
+    F: Fn(&GameSnapshot) -> Result<Decision, String> + Send + 'static,
+{
     let (cols, rows) = terminal::size()?;
     let (width, height) = fit_dims(cols, rows, width, height);
-    let info = BrainInfo {
-        checkpoint: brain.checkpoint().to_string(),
-        engine: brain.engine_str(),
-        device: brain.device_str(),
-    };
-    let worker =
-        InferenceWorker::new(move |snapshot| brain.decide(snapshot).map_err(|e| format!("{e:#}")));
+    let worker = InferenceWorker::new(decide);
     let mut app = App::new(worker, info, width, height);
 
     let mut frame: Vec<u8> = Vec::with_capacity(16 * 1024);

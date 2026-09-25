@@ -36,6 +36,34 @@ point at a checkpoint you already have:
 cargo run --release -- --model /path/to/laya-checkpoint
 ```
 
+## Browser dashboard
+
+```bash
+cargo run --release -- --web          # then open http://127.0.0.1:8080/
+cargo run --release -- --web 9000 --host 0.0.0.0
+```
+
+The same game loop and the same model, served as a web page instead of the terminal UI.
+It streams the live state over Server-Sent Events and shows:
+
+- the board, score, length, best, board fill and the last 16 moves
+- the model's four probabilities for the current move, what it picked, and what was executed
+  (shield overrides are called out)
+- dead-end risk, food reachability, shield state and override counts
+- engine, device, last inference time, decisions per second, model errors
+- session totals: decisions, average / p50 / p95 / min / max inference time, food eaten,
+  rounds, deaths by wall or self, shield rate, mean score
+- charts: inference latency per decision, the model's top-pick probability per decision,
+  score by round (hover any point for details)
+- a round history table and a per-decision log
+
+Controls are buttons on the page and the same keys as the terminal (`A` toggles
+auto-restart, which starts the next round 2.5 s after a game over).
+
+`--mock` runs the UI without the model: decisions come from a hand-written heuristic, the page
+says so in a banner, and best scores are not saved. It exists for UI work on machines without
+the checkpoint.
+
 ## Controls
 
 | Key | Action |
@@ -57,6 +85,9 @@ cargo run --release -- --model /path/to/laya-checkpoint
 --engine <fast|candle>     fast (default) or the stock candle implementation
 --bench [n]                time n decisions (default 12) and exit
 --verify [n]               check the fast engine against candle on n positions and exit
+--web [port]               serve the browser dashboard instead of the terminal UI (default 8080)
+--host <addr>              address for --web to bind (default 127.0.0.1)
+--mock                     no model: a labelled heuristic stand-in, for UI development
 ```
 
 `LAYA_PROFILE=1 laya-snake --bench 24` prints a per-operation time breakdown.

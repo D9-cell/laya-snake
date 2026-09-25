@@ -1,14 +1,19 @@
+#![recursion_limit = "256"]
 mod ai;
 mod app;
 mod bench;
 #[cfg(target_arch = "x86_64")]
 mod engine;
 mod game;
+mod mock;
 mod scores;
+mod web;
 
-use ai::{download_checkpoint_if_needed, LayaBrain};
+use ai::{download_checkpoint_if_needed, Decision, LayaBrain};
 use anyhow::{Context, Result};
+use app::BrainInfo;
 use clapless_args::Args;
+use game::GameSnapshot;
 
 mod clapless_args {
     use crate::ai::EnginePref;
@@ -23,6 +28,9 @@ mod clapless_args {
         pub engine: EnginePref,
         pub bench: Option<usize>,
         pub verify: Option<usize>,
+        pub web: Option<u16>,
+        pub host: String,
+        pub mock: bool,
     }
 
     impl Args {
@@ -37,6 +45,9 @@ mod clapless_args {
                 engine: EnginePref::Auto,
                 bench: None,
                 verify: None,
+                web: None,
+                host: "127.0.0.1".into(),
+                mock: false,
             };
             while let Some(arg) = args.next() {
                 match arg.as_str() {
@@ -76,6 +87,15 @@ mod clapless_args {
                         }
                         out.verify = Some(n.unwrap_or(24));
                     }
+                    "--web" => {
+                        let n = args.peek().and_then(|v| v.parse().ok());
+                        if n.is_some() {
+                            args.next();
+                        }
+                        out.web = Some(n.unwrap_or(8080));
+                    }
+                    "--host" => out.host = args.next().unwrap_or(out.host),
+                    "--mock" => out.mock = true,
                     "--help" | "-h" => {
                         println!("laya-snake");
                         println!(
@@ -88,6 +108,11 @@ mod clapless_args {
                         println!("  --engine <name>     fast (default) | candle  - the reference implementation");
                         println!("  --bench [n]         time n decisions (default 12) and exit");
                         println!("  --verify [n]        check the fast engine against candle on n positions and exit");
+                        println!("  --web [port]        serve the live dashboard in a browser (default port 8080)");
+                        println!(
+                            "  --host <addr>       address for --web to bind (default 127.0.0.1)"
+                        );
+                        println!("  --mock              no model: a labelled heuristic stand-in, for UI development");
                         std::process::exit(0);
                     }
                     other => eprintln!("Ignoring unknown argument: {other}"),
@@ -103,6 +128,12 @@ fn main() -> Result<()> {
 
     if !["root", "multilingual", "typed"].contains(&args.checkpoint.as_str()) {
         anyhow::bail!("checkpoint must be root, multilingual, or typed");
+    }
+
+    if args.mock {
+        let info = mock::info();
+        println!("Running WITHOUT the model: {} (--mock).", info.engine);
+        return launch(&args, mock::decide, info);
     }
 
     let model_dir = download_checkpoint_if_needed(&args.model, &args.checkpoint)
@@ -130,7 +161,28 @@ fn main() -> Result<()> {
         brain.device_str()
     );
     let warm_ms = brain.warm_up().context("warming up the model")?;
-    println!("Ready (first decision took {warm_ms:.0} ms). Starting live snake. Press Q to quit.");
+    println!("Ready (first decision took {warm_ms:.0} ms).");
 
-    app::run(brain, args.width, args.height)
+    let info = BrainInfo {
+        checkpoint: brain.checkpoint().to_string(),
+        engine: brain.engine_str(),
+        device: brain.device_str(),
+    };
+    launch(
+        &args,
+        move |snapshot| brain.decide(snapshot).map_err(|e| format!("{e:#}")),
+        info,
+    )
+}
+
+/// Start the browser dashboard (`--web`) or the terminal UI.
+fn launch<F>(args: &Args, decide: F, info: BrainInfo) -> Result<()>
+where
+    F: Fn(&GameSnapshot) -> std::result::Result<Decision, String> + Send + 'static,
+{
+    if let Some(port) = args.web {
+        return web::run(decide, info, args.width, args.height, &args.host, port);
+    }
+    println!("Starting live snake. Press Q to quit.");
+    app::run(decide, info, args.width, args.height)
 }
