@@ -39,8 +39,8 @@ mod clapless_args {
             let mut out = Self {
                 model: "convaiinnovations/laya".into(),
                 checkpoint: "root".into(),
-                width: 24,
-                height: 14,
+                width: 32,
+                height: 20,
                 threads: None,
                 engine: EnginePref::Auto,
                 bench: None,

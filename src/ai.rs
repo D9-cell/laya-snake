@@ -1,4 +1,4 @@
-use crate::game::{Dir, GameSnapshot, Point};
+use crate::game::{Dir, GameSnapshot, SnakeGame};
 use anyhow::{Context, Result};
 use laya::{Agent, Options, Question};
 use rand::rng;
@@ -54,17 +54,12 @@ struct Prompt {
 
 fn build_prompt(game: &GameSnapshot, order: [Dir; 4]) -> Result<Prompt> {
     let h = game.head();
-    let food = game.food.context("snake has no food")?;
-    let dist = |p: Point| (food.x - p.x).abs() + (food.y - p.y).abs();
-    let cur_dist = dist(h);
+    let food = game.nearest_food().context("snake has no food")?;
+    let closer = game.toward_food();
 
     let mut lines = Vec::with_capacity(4);
     for (key, direction) in NEUTRAL_KEYS.iter().zip(order) {
-        let (dx, dy) = direction.delta();
-        let toward = dist(Point {
-            x: h.x + dx,
-            y: h.y + dy,
-        }) < cur_dist;
+        let toward = closer[direction.index()];
         let danger = if game.is_fatal(direction) {
             "UNSAFE: ends the game immediately."
         } else {
@@ -170,16 +165,7 @@ impl LayaBrain {
             #[cfg(target_arch = "x86_64")]
             Backend::Fast(e) => e.warm_up(),
             Backend::Candle(_) => {
-                let snap = GameSnapshot {
-                    width: 24,
-                    height: 14,
-                    snake: vec![
-                        Point { x: 12, y: 7 },
-                        Point { x: 11, y: 7 },
-                        Point { x: 10, y: 7 },
-                    ],
-                    food: Some(Point { x: 15, y: 7 }),
-                };
+                let snap = GameSnapshot::from_game(&SnakeGame::new(24, 14));
                 let t = Instant::now();
                 self.decide(&snap)?;
                 Ok(t.elapsed().as_secs_f64() * 1e3)

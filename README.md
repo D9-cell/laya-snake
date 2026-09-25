@@ -10,7 +10,7 @@ binary, no Python, no PyTorch, no virtualenv — and a purpose-built CPU inferen
 that runs the *same* model about 2× faster than the stock `laya` crate (1.7× once the CPU is thermally throttled).
 
 ```
-LAYA / LOCAL INTELLIGENCE                          LIVE · L3/5 · 24x14
+LAYA / LOCAL INTELLIGENCE                          LIVE · L3/5 · 32x20
 
 S N A K E                    ROUND 01               Laya  laya-root
 ┌────────────────────────────────────────────────┐  Rust/AVX2 f16 x12 · CPU · Local
@@ -46,19 +46,49 @@ cargo run --release -- --web 9000 --host 0.0.0.0
 The same game loop and the same model, served as a web page instead of the terminal UI.
 It streams the live state over Server-Sent Events and shows:
 
-- the board, score, length, best, board fill and the last 16 moves
+- the game world, in three views: **3D** and **Realistic** are a real-time WebGL scene
+  (Three.js) of a miniature garden: a skinned, rigged snake bent along the server's path, sleeping
+  rabbits as food, boulders as obstacles, a fenced paved yard with lanterns and a pond, with
+  daylight / evening / night lighting, soft shadows and an optional follow camera. Realistic adds a
+  lower cinematic camera and a tilt-shift depth of field. **2D** is the flat canvas board. The
+  scene only draws the server's state; switching views never touches the game.
+- score, length, best, round and session clocks, board fill and the last moves
 - the model's four probabilities for the current move, what it picked, and what was executed
   (shield overrides are called out)
 - dead-end risk, food reachability, shield state and override counts
 - engine, device, last inference time, decisions per second, model errors
 - session totals: decisions, average / p50 / p95 / min / max inference time, food eaten,
-  rounds, deaths by wall or self, shield rate, mean score
+  rounds, deaths by fence, rock or self, shield rate, mean score
 - charts: inference latency per decision, the model's top-pick probability per decision,
   score by round (hover any point for details)
 - a round history table and a per-decision log
 
-Controls are buttons on the page and the same keys as the terminal (`A` toggles
-auto-restart, which starts the next round 2.5 s after a game over).
+The settings panel changes the board size, speed, food count (1 to 12) and obstacles on the
+server, and the view mode, time of day, grid and camera follow in this browser only. Keys are the
+same as the terminal, plus `A` for auto-restart (the next round starts 2.5 s after a game over),
+`V` for 2D/3D, `G` for the grid and `F` for camera follow.
+
+## Game rules
+
+- The board is fenced; running into the fence ends the round.
+- Several foods are on the board at once (5 by default). Eating one grows the snake and a new
+  one appears on a random free cell, so the count stays the same.
+- Rock obstacles are scattered across the board each round (about 5% of the cells). The layout
+  keeps every free cell connected, keeps rocks two cells off the fence and apart from each
+  other, and leaves the snake's starting lane clear. Hitting a rock ends the round.
+- The model is told which moves are fatal and which bring it closer to food. With several foods
+  and rocks in the way, "closer" means a shorter path (around rocks and the body) to the
+  nearest food, not straight-line distance.
+
+The page lives in `src/web/` and is compiled into the binary: `index.html`, `css/dashboard.css`,
+and ES modules in `js/` (`app.js` wiring, `gameState.js`, `snakeMotion.js` interpolation and the
+smoothed centre line, `dashboard.js` panels and charts, `renderer2d.js` canvas board,
+`renderer3d.js` / `scene3d.js` / `snake3d.js` / `rabbit3d.js` / `textures3d.js` for the 3D world).
+Three.js r170 is vendored under `src/web/vendor/three/` (MIT), so the page makes no network calls.
+Optional models (`snake.glb`, `rabbit.glb`) go in `src/web/assets/`; they are read from disk at
+request time and the built-in models are used when they are missing. See
+[`src/web/assets/README.md`](src/web/assets/README.md). Add `?debug=1` to the URL for a developer
+overlay (snake path, skeleton, grid, axes, orbit camera, FPS).
 
 `--mock` runs the UI without the model: decisions come from a hand-written heuristic, the page
 says so in a banner, and best scores are not saved. It exists for UI work on machines without
@@ -72,6 +102,7 @@ the checkpoint.
 | `↑` / `↓` | speed up / slow down |
 | `+` / `-` | grow / shrink the board, live |
 | `S` | toggle the safety shield on/off |
+| `O` | toggle obstacles (starts a new round) |
 | `R` | reset |
 | `Q` / `Esc` | quit |
 
@@ -80,7 +111,7 @@ the checkpoint.
 ```text
 --model <id-or-dir>        Hugging Face model id or local checkpoint directory
 --checkpoint <name>        root (default) | multilingual | typed
---width <n> --height <n>   starting board size (default 24x14)
+--width <n> --height <n>   starting board size (default 32x20)
 --threads <n>              CPU inference threads (default: all; or env LAYA_THREADS)
 --engine <fast|candle>     fast (default) or the stock candle implementation
 --bench [n]                time n decisions (default 12) and exit
@@ -97,7 +128,7 @@ the checkpoint.
 - **NEXT MOVE / MODEL PROBABILITIES** — Laya's real output for this tick: one choice
   question, scored in a single forward pass.
 - **Shield** — a safety wrapper that overrides the model's pick only when it is
-  immediately fatal (wall or self-collision) and a safe alternative exists. Toggle it off
+  immediately fatal (fence, rock or self-collision) and a safe alternative exists. Toggle it off
   to watch the model's raw, unguided choices.
 - **Dead-end risk / Food reachable** — flood-fill/BFS heuristics computed in the game
   code, *not* by the model.

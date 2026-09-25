@@ -31,7 +31,7 @@ fn scenarios(n: usize) -> Vec<(GameSnapshot, [Dir; 4])> {
         }
         out.push((snap.clone(), order));
 
-        let (h, f) = (snap.head(), snap.food.expect("food"));
+        let (h, f) = (snap.head(), snap.nearest_food().expect("food"));
         let mut best: Option<(Dir, i32)> = None;
         for d in Dir::ALL {
             if snap.is_fatal(d) {

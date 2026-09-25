@@ -17,28 +17,22 @@ pub fn info() -> BrainInfo {
     }
 }
 
-/// Softmax over a hand-written score: toward the food, away from walls and dead ends. Sleeps a
+/// Softmax over a hand-written score: toward the nearest food, away from walls and dead ends. Sleeps a
 /// little so the UI sees a latency; the reported time is the real elapsed time of this call.
 pub fn decide(snap: &GameSnapshot) -> Result<Decision, String> {
     let t0 = Instant::now();
     let mut rng = rand::rng();
     std::thread::sleep(Duration::from_millis(rng.random_range(70..140)));
 
-    let food = snap.food.ok_or("snake has no food")?;
-    let mut game = SnakeGame::new(snap.width, snap.height);
-    game.snake = snap.snake.iter().copied().collect();
-    game.food = snap.food;
+    if snap.foods.is_empty() {
+        return Err("snake has no food".into());
+    }
+    let game = SnakeGame::from_snapshot(snap);
+    let closer = snap.toward_food();
 
-    let head = snap.head();
-    let dist = |x: i32, y: i32| (food.x - x).abs() + (food.y - y).abs();
     let mut logits = [0.0f64; 4];
     for d in Dir::ALL {
-        let (dx, dy) = d.delta();
-        let mut l = if dist(head.x + dx, head.y + dy) < dist(head.x, head.y) {
-            1.6
-        } else {
-            0.0
-        };
+        let mut l = if closer[d.index()] { 1.6 } else { 0.0 };
         if snap.is_fatal(d) {
             l -= 5.0;
         } else {

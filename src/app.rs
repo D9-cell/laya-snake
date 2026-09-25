@@ -269,7 +269,7 @@ pub(crate) struct RoundRecord {
     pub interventions: u32,
     pub avg_ms: f64,
     pub duration_s: f64,
-    /// "wall", "self", "board full" or "reset".
+    /// "wall", "rock", "self", "board full" or "reset".
     pub cause: &'static str,
 }
 
@@ -284,6 +284,7 @@ pub(crate) struct Totals {
     pub food: u64,
     pub model_errors: u64,
     pub deaths_wall: u64,
+    pub deaths_rock: u64,
     pub deaths_self: u64,
     pub dir_counts: [u64; 4],
 }
@@ -429,10 +430,24 @@ impl App {
             return;
         }
         self.finish_round("reset");
-        self.game = SnakeGame::new(width, height);
+        self.game = SnakeGame::with_rules(width, height, self.game.rules);
         self.reset_transient();
         self.round_no += 1;
         self.best = load_best(&self.info, width, height);
+    }
+
+    /// Turn the rocks on or off; the layout changes, so a new round starts.
+    pub(crate) fn set_obstacles(&mut self, on: bool) {
+        if self.game.rules.obstacles == on {
+            return;
+        }
+        self.game.rules.obstacles = on;
+        self.reset();
+    }
+
+    /// Change how many foods are on the board, without restarting the round.
+    pub(crate) fn set_food_count(&mut self, n: usize) {
+        self.game.set_food_target(n);
     }
 
     fn change_scale(&mut self, delta: i32) {
@@ -467,6 +482,7 @@ impl App {
             KeyCode::Char(' ') => self.paused = !self.paused,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reset(),
             KeyCode::Char('s') | KeyCode::Char('S') => self.shield_enabled = !self.shield_enabled,
+            KeyCode::Char('o') | KeyCode::Char('O') => self.set_obstacles(!self.game.rules.obstacles),
             KeyCode::Up => self.speed_level = (self.speed_level + 1).min(4),
             KeyCode::Down => self.speed_level = self.speed_level.saturating_sub(1),
             KeyCode::Char('+') | KeyCode::Char('=') => self.change_scale(1),
@@ -543,6 +559,8 @@ impl App {
                 || head.y >= self.game.height as i32
             {
                 Some("wall")
+            } else if self.game.is_obstacle(head) {
+                Some("rock")
             } else {
                 Some("self")
             };
@@ -565,6 +583,7 @@ impl App {
             }
             match cause {
                 Some("wall") => t.deaths_wall += 1,
+                Some("rock") => t.deaths_rock += 1,
                 Some(_) => t.deaths_self += 1,
                 None => {}
             }
@@ -605,7 +624,7 @@ impl App {
             }
             if let Some(cause) = cause {
                 self.finish_round(cause);
-            } else if self.game.food.is_none() {
+            } else if self.game.foods.is_empty() {
                 self.game.game_over = true;
                 self.finish_round("board full");
             }
@@ -798,7 +817,16 @@ impl App {
                 if i == 0 { Color::White } else { Color::Green },
             )?;
         }
-        if let Some(food) = self.game.food {
+        for rock in &self.game.obstacles {
+            draw_text(
+                out,
+                board_left + rock.x as u16 * 2,
+                board_top + rock.y as u16,
+                "■",
+                Color::Grey,
+            )?;
+        }
+        for food in &self.game.foods {
             draw_text(
                 out,
                 board_left + food.x as u16 * 2,
@@ -973,7 +1001,7 @@ impl App {
             out,
             2,
             rows.saturating_sub(1),
-            "SPACE pause  ↑/↓ speed  +/- scale  S shield  R reset  Q quit",
+            "SPACE pause  ↑/↓ speed  +/- scale  S shield  O rocks  R reset  Q quit",
             Color::DarkGrey,
         )?;
         draw_text(
@@ -1129,7 +1157,8 @@ mod tests {
             Point { x: 1, y: 5 },
             Point { x: 2, y: 5 },
         ]);
-        g.food = Some(Point { x: 10, y: 5 });
+        g.set_obstacles(Vec::new());
+        g.foods = vec![Point { x: 10, y: 5 }];
         // Left is a wall. The model likes it best, then Up, then Down.
         let d = decision([0.2, 0.1, 0.6, 0.1], Dir::Left);
         assert_eq!(apply_shield(&d, &g, true), (Dir::Up, true));
@@ -1145,7 +1174,8 @@ mod tests {
     #[test]
     fn shield_ties_go_to_the_models_own_choice() {
         let mut g = SnakeGame::new(24, 14);
-        g.food = Some(Point { x: 20, y: 2 });
+        g.set_obstacles(Vec::new());
+        g.foods = vec![Point { x: 20, y: 2 }];
         let d = decision([0.25, 0.25, 0.25, 0.25], Dir::Down);
         assert_eq!(apply_shield(&d, &g, true), (Dir::Down, false));
     }

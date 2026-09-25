@@ -6,7 +6,7 @@
 use crate::{
     ai::Decision,
     app::{App, BrainInfo, InferenceWorker, MIN_H, MIN_W, SPEED_LEVELS_MS},
-    game::{Dir, GameSnapshot},
+    game::{Dir, GameSnapshot, MAX_FOODS},
 };
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -19,6 +19,28 @@ use std::{
 };
 
 const INDEX_HTML: &str = include_str!("web/index.html");
+
+/// Page files compiled into the binary, by URL path.
+const STATIC_FILES: &[(&str, &str, &str)] = &[
+    ("/css/dashboard.css", "text/css; charset=utf-8", include_str!("web/css/dashboard.css")),
+    ("/js/app.js", JS, include_str!("web/js/app.js")),
+    ("/js/gameState.js", JS, include_str!("web/js/gameState.js")),
+    ("/js/snakeMotion.js", JS, include_str!("web/js/snakeMotion.js")),
+    ("/js/dashboard.js", JS, include_str!("web/js/dashboard.js")),
+    ("/js/renderer2d.js", JS, include_str!("web/js/renderer2d.js")),
+    ("/js/renderer3d.js", JS, include_str!("web/js/renderer3d.js")),
+    ("/js/scene3d.js", JS, include_str!("web/js/scene3d.js")),
+    ("/js/snake3d.js", JS, include_str!("web/js/snake3d.js")),
+    ("/js/rabbit3d.js", JS, include_str!("web/js/rabbit3d.js")),
+    ("/js/textures3d.js", JS, include_str!("web/js/textures3d.js")),
+    ("/js/util.js", JS, include_str!("web/js/util.js")),
+    ("/vendor/three/build/three.module.min.js", JS, include_str!("web/vendor/three/build/three.module.min.js")),
+    ("/vendor/three/addons/loaders/GLTFLoader.js", JS, include_str!("web/vendor/three/addons/loaders/GLTFLoader.js")),
+    ("/vendor/three/addons/utils/BufferGeometryUtils.js", JS, include_str!("web/vendor/three/addons/utils/BufferGeometryUtils.js")),
+    ("/vendor/three/addons/utils/SkeletonUtils.js", JS, include_str!("web/vendor/three/addons/utils/SkeletonUtils.js")),
+    ("/vendor/three/addons/controls/OrbitControls.js", JS, include_str!("web/vendor/three/addons/controls/OrbitControls.js")),
+];
+const JS: &str = "text/javascript; charset=utf-8";
 const MAX_W: usize = 64;
 const MAX_H: usize = 40;
 /// How long a finished game stays on screen before auto-restart starts the next round.
@@ -128,6 +150,15 @@ fn command(w: &mut Web, path: &str) -> bool {
             w.over_since = None;
         }
         "shield" => w.app.shield_enabled = !w.app.shield_enabled,
+        "obstacles" => {
+            let on = !w.app.game.rules.obstacles;
+            w.app.set_obstacles(on);
+            w.over_since = None;
+        }
+        "foods" => match arg.and_then(|a| a.parse::<usize>().ok()) {
+            Some(n) if (1..=MAX_FOODS).contains(&n) => w.app.set_food_count(n),
+            _ => return false,
+        },
         "auto" => w.auto_restart = !w.auto_restart,
         "faster" => w.app.speed_level = (w.app.speed_level + 1).min(4),
         "slower" => w.app.speed_level = w.app.speed_level.saturating_sub(1),
@@ -251,7 +282,9 @@ fn state_json(w: &Web) -> Value {
         "best": a.best,
         "fill": g.board_fill_ratio(),
         "snake": g.snake.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
-        "food": g.food.map(|p| [p.x, p.y]),
+        "foods": g.foods.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+        "obstacles": g.obstacles.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+        "rules": { "foods": g.rules.foods, "obstacles": g.rules.obstacles, "max_foods": MAX_FOODS },
         "direction": dir_name(g.direction),
         "info": {
             "checkpoint": a.info.checkpoint,
@@ -284,6 +317,7 @@ fn state_json(w: &Web) -> Value {
             "food": t.food,
             "model_errors": t.model_errors,
             "deaths_wall": t.deaths_wall,
+            "deaths_rock": t.deaths_rock,
             "deaths_self": t.deaths_self,
             "dir_counts": t.dir_counts,
             "rounds_played": a.rounds.len(),
@@ -359,8 +393,54 @@ fn handle(mut stream: TcpStream, web: &SharedWeb) -> std::io::Result<()> {
             }
         }
         ("GET", "/favicon.ico") => respond(&mut stream, "204 No Content", "text/plain", b""),
+        ("GET", p) if p.starts_with("/assets/") => match read_asset(&p["/assets/".len()..]) {
+            Some((body, ctype)) => respond(&mut stream, "200 OK", ctype, &body),
+            None => respond(&mut stream, "404 Not Found", "text/plain", b"no such asset"),
+        },
+        ("GET", p) => match STATIC_FILES.iter().find(|(path, _, _)| *path == p) {
+            Some((_, ctype, body)) => respond(&mut stream, "200 OK", ctype, body.as_bytes()),
+            None => respond(&mut stream, "404 Not Found", "text/plain", b"not found"),
+        },
         _ => respond(&mut stream, "404 Not Found", "text/plain", b"not found"),
     }
+}
+
+/// Optional 3D assets (models, textures) read from disk so they can be swapped without a rebuild:
+/// `$LAYA_WEB_ASSETS`, else `src/web/assets` under the working directory, else `assets` beside the
+/// binary. The page falls back to built-in geometry when a file is missing.
+fn read_asset(rel: &str) -> Option<(Vec<u8>, &'static str)> {
+    let safe = !rel.is_empty()
+        && rel
+            .split('/')
+            .all(|part| !part.is_empty() && !part.starts_with('.'))
+        && rel
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-/".contains(c));
+    if !safe {
+        return None;
+    }
+    let ctype = match rel.rsplit('.').next()? {
+        "glb" => "model/gltf-binary",
+        "gltf" => "model/gltf+json",
+        "bin" => "application/octet-stream",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "ktx2" => "image/ktx2",
+        _ => return None,
+    };
+    let mut roots = Vec::new();
+    if let Some(dir) = std::env::var_os("LAYA_WEB_ASSETS") {
+        roots.push(std::path::PathBuf::from(dir));
+    }
+    roots.push(std::path::PathBuf::from("src/web/assets"));
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("assets"))) {
+        roots.push(dir);
+    }
+    roots
+        .into_iter()
+        .find_map(|root| std::fs::read(root.join(rel)).ok())
+        .map(|body| (body, ctype))
 }
 
 /// Server-Sent Events: one full state whenever it changes, at most every 40 ms, and at least
